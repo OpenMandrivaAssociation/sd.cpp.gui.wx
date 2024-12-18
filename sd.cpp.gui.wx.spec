@@ -51,7 +51,7 @@ Supported Backends:
 
 
 %prep
-%autosetup -n %{name}-%{version -p1
+%autosetup -n %{name}-%{version} -p1
 
 %files
 %license LICENSE
