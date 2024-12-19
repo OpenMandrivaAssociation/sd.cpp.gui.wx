@@ -7,11 +7,13 @@ Summary:        Stable Diffusion GUI written in C++
 License:        MiT
 URL:            https://github.com/fszontagh/sd.cpp.gui.wx/
 Source0:        https://github.com/fszontagh/sd.cpp.gui.wx/archive/v%{version}/%{name}-%{version}.tar.gz
+Patch0:         https://github.com/fszontagh/sd.cpp.gui.wx/commit/96762bb206ccdfd5ed78d523d01d6158f82c2ffa.patch
 
-BuildRequires:	pkgconfig(libcurl)
+BuildRequires:  cmake(CpuFeatures)
 BuildRequires:	cmake(libzip)
 BuildRequires:  pkgconfig(gtk+-3.0)
 BuildRequires:  pkgconfig(exiv2)
+BuildRequires:	pkgconfig(libcurl)
 BuildRequires:  pkgconfig(openssl)
 BuildRequires:  pkgconfig(openblas)
 BuildRequires:  pkgconfig(vulkan)
