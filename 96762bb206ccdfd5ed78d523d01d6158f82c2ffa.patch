@@ -1,0 +1,692 @@
+From 96762bb206ccdfd5ed78d523d01d6158f82c2ffa Mon Sep 17 00:00:00 2001
+From: fszontagh <szf@fsociety.hu>
+Date: Wed, 18 Dec 2024 20:20:29 +0100
+Subject: [PATCH] search for cpu_features on system if installed, init remote
+ diffusion socket server
+
+---
+ CMakeLists.txt                    |  22 +++---
+ cmake/CpuFeatures.cmake           |  15 ++++
+ cmake/cpack.cmake                 |  18 ++++-
+ cmake/sockets-cpp.cmake           |  12 +++
+ server/CMakeLists.txt             |  47 +++++++++++
+ server/server-config-example.json |   5 ++
+ server/src/ServerConfig.h         |  13 +++
+ server/src/SocketApp.cpp          |  62 +++++++++++++++
+ server/src/SocketApp.h            |  49 ++++++++++++
+ server/src/TerminalApp.cpp        | 127 ++++++++++++++++++++++++++++++
+ server/src/TerminalApp.h          |  56 +++++++++++++
+ server/src/config.hpp.in          |  25 ++++++
+ server/src/main.cpp               |   3 +
+ server/src/pch.h                  |  31 ++++++++
+ src/network/packets.h             |  21 +++++
+ 15 files changed, 494 insertions(+), 12 deletions(-)
+ create mode 100644 cmake/CpuFeatures.cmake
+ create mode 100644 cmake/sockets-cpp.cmake
+ create mode 100644 server/CMakeLists.txt
+ create mode 100644 server/server-config-example.json
+ create mode 100644 server/src/ServerConfig.h
+ create mode 100644 server/src/SocketApp.cpp
+ create mode 100644 server/src/SocketApp.h
+ create mode 100644 server/src/TerminalApp.cpp
+ create mode 100644 server/src/TerminalApp.h
+ create mode 100644 server/src/config.hpp.in
+ create mode 100644 server/src/main.cpp
+ create mode 100644 server/src/pch.h
+ create mode 100644 src/network/packets.h
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 8b15a62..bcc4ae6 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -48,16 +48,10 @@ endif()
+ 
+ 
+ include(cmake/wxWidgets.cmake)
++include(cmake/CpuFeatures.cmake)
++
+ 
+-# CPU Features dependency
+-FetchContent_Declare(
+-    cpu_features
+-    GIT_REPOSITORY https://github.com/google/cpu_features.git
+-    GIT_TAG v0.9.0
+-)
+-set(BUILD_TESTING OFF)
+ 
+-FetchContent_MakeAvailable(cpu_features)
+ 
+ execute_process(
+     COMMAND git log -1 --format=%h
+@@ -93,6 +87,14 @@ endif()
+ 
+ add_subdirectory(extprocess)
+ 
++option(SD_SERVER "Build socket server" ON)
++
++if (SD_SERVER)
++    include(cmake/sockets-cpp.cmake)
++    add_subdirectory(server)
++endif()
++
++
+ # Set target for the application
+ add_executable(${PROJECT_BINARY_NAME} ${SOURCES})
+ target_precompile_headers(${PROJECT_BINARY_NAME} PRIVATE src/pch.h)
+@@ -144,7 +146,7 @@ if (SDGUI_HIPBLAS)
+ endif()
+ 
+ 
+-list(APPEND APPDEPENDS cpu_features OpenSSL::Crypto CURL::libcurl)
++list(APPEND APPDEPENDS CpuFeatures::cpu_features OpenSSL::Crypto CURL::libcurl)
+ 
+ if (WIN32)
+     list(APPEND APPDEPENDS exiv2lib)
+@@ -160,7 +162,7 @@ add_dependencies(${PROJECT_BINARY_NAME} ${APPDEPENDS} po-compile)
+ target_include_directories(${PROJECT_BINARY_NAME} PRIVATE 
+     ${CMAKE_CURRENT_BINARY_DIR}
+     ${stable_diffusion_SOURCE_DIR}
+-    ${cpu_features_SOURCE_DIR}
++    ${CpuFeatures_SOURCE_DIR}
+     ${wxWidgets_SOURCE_DIR}/include
+ )
+ message(STATUS "APPDEPS: ${APPDEPENDS}")
+diff --git a/cmake/CpuFeatures.cmake b/cmake/CpuFeatures.cmake
+new file mode 100644
+index 0000000..0b9bae2
+--- /dev/null
++++ b/cmake/CpuFeatures.cmake
+@@ -0,0 +1,15 @@
++find_package(CpuFeatures QUIET)
++
++if (NOT TARGET CpuFeatures::CpuFeatures)
++# CPU Features dependency
++FetchContent_Declare(
++    CpuFeatures
++    GIT_REPOSITORY https://github.com/google/cpu_features.git
++    GIT_TAG v0.9.0
++
++)
++set(BUILD_TESTING OFF)
++
++FetchContent_MakeAvailable(CpuFeatures)
++
++endif()
+\ No newline at end of file
+diff --git a/cmake/cpack.cmake b/cmake/cpack.cmake
+index 8017379..5d1cd8f 100644
+--- a/cmake/cpack.cmake
++++ b/cmake/cpack.cmake
+@@ -67,10 +67,18 @@ set_property(TARGET ${PROJECT_BINARY_NAME} PROPERTY APPIMAGE_ICON_FILE ${CMAKE_S
+ 
+ 
+ install(TARGETS ${PROJECT_BINARY_NAME} DESTINATION ${bin_INSTALL_PATH_NSIS} COMPONENT "${CMAKE_PROJECT_NAME}")
++#list(APPEND CPACK_COMPONENTS_ALL "${CMAKE_PROJECT_NAME}")
++
++if (SD_SERVER OR EXISTS "${CMAKE_BINARY_DIR}/server/${EPREFIX}${PROJECT_BINARY_NAME}_server${CMAKE_EXECUTABLE_SUFFIX}")
++    install(FILES ${CMAKE_BINARY_DIR}/server/${EPREFIX}${PROJECT_BINARY_NAME}_server${CMAKE_EXECUTABLE_SUFFIX}
++    DESTINATION ${bin_INSTALL_PATH_NSIS} 
++    COMPONENT "${CMAKE_PROJECT_NAME}Server")
++    list(APPEND CPACK_COMPONENTS_ALL "${CMAKE_PROJECT_NAME}Server")
++    set(CPACK_DEBIAN_STABLEDIFFUSIONGUISERVER_PACKAGE_NAME "stablediffusiongui-server-${SDCPP_VERSION}")
++    set(CPACK_DEBIAN_STABLEDIFFUSIONGUISERVER_PACKAGE_RELEASE "${TODAY}~${DISTRO_VERSION}")
++endif()
+ 
+ 
+-list(APPEND CPACK_COMPONENTS_ALL "${CMAKE_PROJECT_NAME}")
+-
+ if (SDGUI_AVX OR EXISTS "${CMAKE_BINARY_DIR}/${EPREFIX}${CMAKE_SHARED_LIBRARY_PREFIX}stable-diffusion_avx${CMAKE_SHARED_LIBRARY_SUFFIX}")
+ 	install(FILES ${CMAKE_BINARY_DIR}/${EPREFIX}${CMAKE_SHARED_LIBRARY_PREFIX}stable-diffusion_avx${CMAKE_SHARED_LIBRARY_SUFFIX}
+ 	DESTINATION ${lib_INSTALL_PATH_NSIS} 
+@@ -166,6 +174,7 @@ elseif(UNIX AND NOT APPLE)
+     else()
+         set(CPACK_DEBIAN_LIBSDCPP_CUDA_PACKAGE_DEPENDS "${CPACK_DEBIAN_PACKAGE_DEPENDS}, libcublas11, libcudart11, libcublaslt11, libnvidia-compute-470 | libnvidia-compute-535 | libnvidia-compute-550 ")
+     endif()
++    set(CPACK_DEBIAN_STABLEDIFFUSIONGUISERVER_PACKAGE_DEPENDS  "openssl, curl, libudev1 (>= 183), libvulkan1, libx11-6, libstablediffusion-avx-${SDCPP_VERSION} (=${CPACK_PACKAGE_VERSION}-${TODAY}~${DISTRO_VERSION}) | libstablediffusion-avx2-${SDCPP_VERSION} (=${CPACK_PACKAGE_VERSION}-${TODAY}~${DISTRO_VERSION}) | libstablediffusion-avx512-${SDCPP_VERSION} (=${CPACK_PACKAGE_VERSION}-${TODAY}~${DISTRO_VERSION}) | libstablediffusion-cuda-${SDCPP_VERSION} (=${CPACK_PACKAGE_VERSION}-${TODAY}~${DISTRO_VERSION}) | libstablediffusion-hipblas-${SDCPP_VERSION} (=${CPACK_PACKAGE_VERSION}-${TODAY}~${DISTRO_VERSION}) | libstablediffusion-vulkan-${SDCPP_VERSION} (=${CPACK_PACKAGE_VERSION}-${TODAY}~${DISTRO_VERSION})")
+     set(CPACK_DEBIAN_PACKAGE_DESCRIPTION ${CMAKE_PROJECT_DESCRIPTION})
+     set(CPACK_DEBIAN_PACKAGE_SECTION "graphics")
+     set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
+@@ -199,6 +208,11 @@ include(CPack)
+         DESCRIPTION "Stable Diffusion CPP Desktop Graphical User Interface"
+     )
+ 
++    cpack_add_component("${CMAKE_PROJECT_NAME}Server"
++        DISPLAY_NAME "SD C++ Server"
++        DESCRIPTION "Stable Diffusion CPP Server"
++    )    
++
+     cpack_add_component(libsdcpp_avx
+         DISPLAY_NAME "SD C++ -AVX"
+         DESCRIPTION "SD CPU backend with AVX CPU feature"
+diff --git a/cmake/sockets-cpp.cmake b/cmake/sockets-cpp.cmake
+new file mode 100644
+index 0000000..d2556ab
+--- /dev/null
++++ b/cmake/sockets-cpp.cmake
+@@ -0,0 +1,12 @@
++ExternalProject_Add(
++  sockets_cpp
++  PREFIX ${CMAKE_BINARY_DIR}/external/sockets_cpp
++  GIT_REPOSITORY https://github.com/CJLove/sockets-cpp.git
++  GIT_TAG master
++  CMAKE_ARGS -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON -DFMT_SUPPORT=OFF
++  INSTALL_COMMAND ""
++  UPDATE_COMMAND ""
++)
++ExternalProject_Get_property(sockets_cpp SOURCE_DIR)
++set(sockets_cpp_SOURCE ${SOURCE_DIR}/include)
++message(STATUS "sockets_cpp_SOURCE: ${sockets_cpp_SOURCE}")
+\ No newline at end of file
+diff --git a/server/CMakeLists.txt b/server/CMakeLists.txt
+new file mode 100644
+index 0000000..b216eca
+--- /dev/null
++++ b/server/CMakeLists.txt
+@@ -0,0 +1,47 @@
++set(SERVER_BINARY_NAME "${PROJECT_BINARY_NAME}_server")
++set(SERVER_EXPTORCESS_BINARY_NAME "${PROJECT_BINARY_NAME}_server_diffuser")
++
++math(EXPR SHARED_MEMORY_SIZE "1024*1024*16")
++math(EXPR STACK_SIZE "${SHARED_MEMORY_SIZE} + ((1024*1024)*4)")
++message(STATUS "SHARED_MEMORY_SIZE: ${SHARED_MEMORY_SIZE}")
++message(STATUS "STACK_SIZE: ${STACK_SIZE}")
++
++configure_file(src/config.hpp.in config.hpp)
++
++
++
++set(SOURCES src/main.cpp src/TerminalApp.cpp src/SocketApp.cpp)
++
++if (MSVC)
++    list(APPEND SOURCES ${CMAKE_SOURCE_DIR}/minimal.rc)
++endif()
++
++add_executable(${SERVER_BINARY_NAME} ${SOURCES} ${CMAKE_SOURCE_DIR}/src/libs/SharedLibrary.cpp ${CMAKE_SOURCE_DIR}/src/libs/SharedMemoryManager.cpp)
++
++target_precompile_headers(${SERVER_BINARY_NAME} PRIVATE src/pch.h)
++
++if (MSVC)
++    target_link_options(${SERVER_BINARY_NAME} PRIVATE /STACK:${STACK_SIZE})
++    target_compile_options(${SERVER_BINARY_NAME} PRIVATE /Zc:__cplusplus)
++else()
++    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-z,stack-size=${STACK_SIZE}")
++endif()
++
++target_include_directories(${SERVER_BINARY_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/server/src ${CMAKE_SOURCE_DIR}/src ${sockets_cpp_SOURCE} ${wxWidgets_SOURCE_DIR}/include ${exiv2_INCLUDE_DIR} ${CMAKE_BINARY_DIR} ${CMAKE_CURRENT_BINARY_DIR})
++
++
++set(bin_INSTALL_PATH_NSIS "bin")
++
++
++if (WIN32)
++	set(bin_INSTALL_PATH_NSIS ".")
++endif()
++
++
++install(TARGETS ${SERVER_BINARY_NAME} RUNTIME DESTINATION ${bin_INSTALL_PATH_NSIS} COMPONENT "${CMAKE_PROJECT_NAME}Server")
++
++if(WIN32)
++    target_link_libraries(${SERVER_BINARY_NAME} PRIVATE  wxWidgets::wxWidgets OpenSSL::Crypto)
++else(WIN32)
++    target_link_libraries(${SERVER_BINARY_NAME} PRIVATE wx::base wx::core OpenSSL::Crypto)
++endif(WIN32)
+\ No newline at end of file
+diff --git a/server/server-config-example.json b/server/server-config-example.json
+new file mode 100644
+index 0000000..0cc7465
+--- /dev/null
++++ b/server/server-config-example.json
+@@ -0,0 +1,5 @@
++{
++    "port": 8191,
++    "host": "127.0.0.1",
++    "logfile": "/var/log/stable-diffusion-server.log"
++}
+\ No newline at end of file
+diff --git a/server/src/ServerConfig.h b/server/src/ServerConfig.h
+new file mode 100644
+index 0000000..d8e9e12
+--- /dev/null
++++ b/server/src/ServerConfig.h
+@@ -0,0 +1,13 @@
++#ifndef __SERVER_CONFIG_H
++#define __SERVER_CONFIG_H
++
++struct ServerConfig {
++    std::string host        = "127.0.0.1";
++    uint16_t port           = 8191;
++    int max_clients         = 10;
++    size_t max_request_size = 1024 * 1024 * 1024;
++    std::string logfile;
++};
++
++NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ServerConfig, host, port, max_clients, max_request_size, logfile)
++#endif  // __SERVER_CONFIG_H
+diff --git a/server/src/SocketApp.cpp b/server/src/SocketApp.cpp
+new file mode 100644
+index 0000000..62d75db
+--- /dev/null
++++ b/server/src/SocketApp.cpp
+@@ -0,0 +1,62 @@
++#include "SocketApp.h"
++#include "TerminalApp.h"
++SocketApp::SocketApp(const char* listenAddr, uint16_t port, TerminalApp* parent)
++    : m_socketOpt({sockets::TX_BUFFER_SIZE, sockets::RX_BUFFER_SIZE, listenAddr}), m_server(*this, &m_socketOpt), parent(parent) {
++    sockets::SocketRet ret = m_server.start(port);
++    if (ret.m_success) {
++        this->parent->sendLogEvent("Server started on  " + std::string(listenAddr) + ":" + std::to_string(port));
++    } else {
++        this->parent->sendLogEvent("Error: " + ret.m_msg, wxLOG_Error);
++        this->needToRun = false;
++    }
++}
++
++SocketApp::~SocketApp() {
++    {
++        std::lock_guard<std::mutex> guard(m_mutex);
++        this->m_clientInfo.clear();
++    }
++}
++
++void SocketApp::sendMsg(int idx, const char* data, size_t len) {
++    std::lock_guard<std::mutex> guard(m_mutex);
++    if (idx == 0) {
++        auto ret = m_server.sendBcast(data, len);
++        if (!ret.m_success) {
++            this->parent->sendLogEvent("Broadcast send Error: " + ret.m_msg, wxLOG_Error);
++        }
++    } else if (this->m_clientInfo.contains(idx)) {
++        auto ret = m_server.sendClientMessage(idx, data, len);
++        if (!ret.m_success) {
++            this->parent->sendLogEvent("Send Error: " + ret.m_msg, wxLOG_Error);
++        }
++    } else {
++        this->parent->sendLogEvent("Client " + std::to_string(idx) + " doesn't exist", wxLOG_Warning);
++    }
++}
++
++void SocketApp::onReceiveClientData(const sockets::ClientHandle& client, const char* data, size_t size) {
++    std::string str(reinterpret_cast<const char*>(data), size);
++    this->parent->sendLogEvent("Client " + std::to_string(client) + " Rcvd: " + str, wxLOG_Debug);
++}
++
++void SocketApp::onClientConnect(const sockets::ClientHandle& client) {
++    std::string ipAddr;
++    uint16_t port;
++    bool connected;
++    if (m_server.getClientInfo(client, ipAddr, port, connected)) {
++        this->parent->sendLogEvent("Client " + std::to_string(client) + " connected from " + ipAddr + ":" + std::to_string(port));
++        {
++            std::lock_guard<std::mutex> guard(m_mutex);
++            m_clientInfo[client] = {ipAddr, port, client, wxGetLocalTime()};
++        }
++    }
++}
++
++void SocketApp::onClientDisconnect(const sockets::ClientHandle& client, const sockets::SocketRet& ret) {
++    this->parent->sendLogEvent("Client " + std::to_string(client) + " disconnected: " + ret.m_msg);
++    {
++        std::lock_guard<std::mutex> guard(m_mutex);
++        m_clientInfo.erase(client);
++    }
++}
+diff --git a/server/src/SocketApp.h b/server/src/SocketApp.h
+new file mode 100644
+index 0000000..8de8197
+--- /dev/null
++++ b/server/src/SocketApp.h
+@@ -0,0 +1,49 @@
++#ifndef _SERVER_SOCKETAPP_H
++#define _SERVER_SOCKETAPP_H
++
++#include <wx/log.h>
++#include <wx/time.h>
++
++
++#include "sockets-cpp/TcpServer.h"
++
++#include "libs/json.hpp"
++
++inline auto LogPrinter = [](const std::string& strLogMsg) { std::cout << strLogMsg << std::endl; };
++
++class TerminalApp;
++
++class SocketApp {
++public:
++
++    explicit SocketApp(const char* listenAddr, uint16_t port, TerminalApp* parent = nullptr);
++
++    virtual ~SocketApp();
++
++    void onClientConnect(const sockets::ClientHandle& client);
++
++    void onReceiveClientData(const sockets::ClientHandle& client, const char* data, size_t size);
++
++    void onClientDisconnect(const sockets::ClientHandle& client, const sockets::SocketRet& ret);
++
++    void sendMsg(int idx, const char* data, size_t len);
++    inline bool isRunning() { return this->needToRun == true; }
++    inline void stop() { this->needToRun = false; }
++
++private:
++    struct clientInfo {
++        std::string host;
++        uint16_t port;
++        int idx;
++        long connected_at;
++    };
++    sockets::SocketOpt m_socketOpt;
++    sockets::TcpServer<SocketApp> m_server;
++    int m_clientIdx = 0;
++    std::map<int, clientInfo> m_clientInfo;
++    std::mutex m_mutex;
++    std::atomic<bool> needToRun = true;
++    TerminalApp* parent = nullptr;
++};
++
++#endif // _SERVER_SOCKETAPP_H
+\ No newline at end of file
+diff --git a/server/src/TerminalApp.cpp b/server/src/TerminalApp.cpp
+new file mode 100644
+index 0000000..e16092f
+--- /dev/null
++++ b/server/src/TerminalApp.cpp
+@@ -0,0 +1,127 @@
++#include "TerminalApp.h"
++
++bool TerminalApp::OnInit() {
++    wxLog::SetTimestamp("%Y-%m-%d %H:%M:%S");
++    wxLogInfo("OnInit started");
++
++    if (argc < 2) {
++        wxLogError("Usage: %s <config.json>", argv[0]);
++        return false;
++    }
++
++    wxFileName config(argv[1]);
++    if (config.FileExists() == false) {
++        wxLogError("Config file not found: %s", argv[1]);
++        return false;
++    }
++
++    wxTextFile file;
++    file.Open(config.GetAbsolutePath());
++
++    wxString fileData;
++    for (int i = 0; i < file.GetLineCount(); i++) {
++        fileData << file.GetLine(i) + "\n";
++    }
++    file.Close();
++
++    try {
++        nlohmann::json cfg = nlohmann::json::parse(fileData.utf8_string());
++        auto cdata         = cfg.get<ServerConfig>();
++        this->configData   = std::make_shared<ServerConfig>(cdata);
++    } catch (const nlohmann::json::parse_error& e) {
++        wxLogError("Error parsing config file: %s", e.what());
++        return false;
++    }
++    wxLogInfo("Config loaded");
++
++    if (configData->logfile.empty() == false) {
++        configData->logfile = wxFileName(configData->logfile).GetAbsolutePath();
++        wxLogInfo("Logging to file: %s", configData->logfile);
++
++        this->logfile = std::fopen(configData->logfile.c_str(), "a+");
++        if (this->logfile == nullptr) {
++            wxLogError("Failed to open log file: %s", configData->logfile);
++            return false;
++        }
++        this->logger = new wxLogStderr(this->logfile);
++        wxASSERT(this->logger != nullptr);
++        this->oldLogger = wxLog::GetActiveTarget();
++        wxLog::SetActiveTarget(this->logger);
++    }
++    this->sharedMemoryManager = std::make_shared<SharedMemoryManager>(SHARED_MEMORY_PATH, SHARED_MEMORY_SIZE, true);
++    wxLogDebug(wxString::Format("Shared memory initialized: %s size: %d", SHARED_MEMORY_PATH, SHARED_MEMORY_SIZE));
++    // init events
++    Bind(wxEVT_THREAD_LOG, [](wxCommandEvent& evt) {
++        switch (evt.GetInt()) {
++            case wxLOG_Info:
++                wxLogInfo(evt.GetString());
++                break;
++            case wxLOG_Warning:
++                wxLogWarning(evt.GetString());
++                break;
++            case wxLOG_Error:
++                wxLogError(evt.GetString());
++                break;
++            case wxLOG_Debug:
++                wxLogDebug(evt.GetString());
++                break;
++            default:
++                wxLogInfo(evt.GetString());
++                break;
++        }
++    });
++
++    this->eventHandlerReady = true;
++    return true;
++    // return wxAppConsole::OnInit();  // Call the base class implementation
++}
++
++int TerminalApp::OnExit() {
++    wxLogInfo("OnExit started");
++
++    if (this->socket != nullptr) {
++        this->socket->stop();
++    }
++
++    for (auto& thread : this->threads) {
++        if (thread.joinable()) {
++            thread.join();
++        }
++    }
++
++    this->threads.clear();
++
++    wxLog::SetActiveTarget(this->oldLogger);
++
++    wxLogDebug("Attempting to stop logger.");
++    delete this->logger;
++    fclose(this->logfile);
++
++    return wxAppConsole::OnExit();
++}
++
++int TerminalApp::OnRun() {
++    wxLogInfo("Event handler started");
++
++    wxEventLoop loop;
++    wxEventLoopBase::SetActive(&loop);
++
++    std::thread tr([this]() {
++        while (!this->eventHandlerReady) {
++            std::this_thread::sleep_for(std::chrono::milliseconds(10));
++        }
++        this->sendLogEvent("Starting thread");
++        this->socket = new SocketApp(this->configData->host.c_str(), this->configData->port, this);
++
++        while (this->socket->isRunning()) {
++            std::this_thread::sleep_for(std::chrono::milliseconds(100));
++        }
++
++        delete this->socket;
++        this->socket = nullptr;
++    });
++
++    this->threads.emplace_back(std::move(tr));
++
++    return wxAppConsole::OnRun();
++}
+\ No newline at end of file
+diff --git a/server/src/TerminalApp.h b/server/src/TerminalApp.h
+new file mode 100644
+index 0000000..23eb2ee
+--- /dev/null
++++ b/server/src/TerminalApp.h
+@@ -0,0 +1,56 @@
++#ifndef _SERVER_TERMINALAPP_H
++#define _SERVER_TERMINALAPP_H
++
++#include "wx/wxprec.h"
++
++#ifndef WX_PRECOMP
++#include "wx/wx.h"
++#endif
++
++#include <wx/app.h>
++#include <wx/event.h>
++#include <wx/evtloop.h>
++#include <wx/log.h>
++#include <wx/textfile.h>
++#include <iostream>
++
++#include "ServerConfig.h"
++#include "SocketApp.h"
++#include "config.hpp"
++#include "sockets-cpp/TcpServer.h"
++
++wxDECLARE_APP(TerminalApp);
++
++wxDEFINE_EVENT(wxEVT_THREAD_LOG, wxCommandEvent);
++
++class TerminalApp : public wxAppConsole {
++public:
++    virtual bool OnInit() override;
++    virtual int OnRun() override;
++    virtual int OnExit() override;
++    virtual bool IsGUI() const override { return false; }
++
++    inline void sendLogEvent(const wxString& strLogMsg, const wxLogLevel level = wxLOG_Info) {
++        if (!this->eventHandlerReady) {
++            std::cerr << "Event handler not ready. Dropping log: " << strLogMsg << std::endl;
++            return;
++        }
++        wxCommandEvent evt(wxEVT_THREAD_LOG);
++        evt.SetString(strLogMsg);
++        evt.SetInt((int)level);
++        wxTheApp->AddPendingEvent(evt);
++    }
++
++private:
++    std::vector<std::thread> threads;
++    bool m_shouldExit = false;
++    std::shared_ptr<SharedMemoryManager> sharedMemoryManager;
++    SocketApp* socket                        = nullptr;
++    std::FILE* logfile                       = nullptr;
++    wxLogStderr* logger                      = nullptr;
++    wxLog* oldLogger                         = nullptr;
++    std::shared_ptr<ServerConfig> configData = nullptr;
++    std::atomic<bool> eventHandlerReady      = false;
++};
++
++#endif  // _SERVER_TERMINALAPP_H
+\ No newline at end of file
+diff --git a/server/src/config.hpp.in b/server/src/config.hpp.in
+new file mode 100644
+index 0000000..d802a30
+--- /dev/null
++++ b/server/src/config.hpp.in
+@@ -0,0 +1,25 @@
++#ifndef SDGUI_CONFIG_H
++#define SDGUI_CONFIG_H
++#include <string>
++#include <vector>
++
++// Warning: this is an automatic generated header file, do not modify it
++#if defined(_WIN32) || defined(WIN32) || defined(WIN64)
++inline const char* EPROCESS_BINARY_NAME = "@EPROCESS_BINARY_NAME@.exe";
++#else
++inline const char* EPROCESS_BINARY_NAME = "@EPROCESS_BINARY_NAME@";
++#endif
++inline const char* SHARED_MEMORY_PATH         = "/@PROJECT_NAME@";
++inline const unsigned int SHARED_MEMORY_SIZE  = @SHARED_MEMORY_SIZE@;
++inline const unsigned int EPROCESS_SLEEP_TIME = 500;
++inline const unsigned int EPROCESS_STD_BUFFER = 10240;
++
++inline const std::vector<std::string> CHECKPOINT_FILE_EXTENSIONS = {"safetensors", "cpkt", "gguf"};
++inline const std::vector<std::string> EMBEDDING_FILE_EXTENSIONS  = {"safetensors", "pt"};
++inline const std::vector<std::string> LORA_FILE_EXTENSIONS       = {"safetensors", "pt", "ckpt"};
++inline const std::vector<std::string> VAE_FILE_EXTENSIONS        = {"safetensors", "pt", "ckpt", "gguf"};
++inline const std::vector<std::string> TAESD_FILE_EXTENSIONS      = {"safetensors", "pth", "gguf"};
++inline const std::vector<std::string> ESRGAN_FILE_EXTENSIONS     = {"pth", "pt"};
++inline const std::vector<std::string> CONTROLNET_FILE_EXTENSIONS = {"safetensors", "pth"};
++
++#endif
+\ No newline at end of file
+diff --git a/server/src/main.cpp b/server/src/main.cpp
+new file mode 100644
+index 0000000..f500012
+--- /dev/null
++++ b/server/src/main.cpp
+@@ -0,0 +1,3 @@
++#include "TerminalApp.h"
++
++wxIMPLEMENT_APP(TerminalApp);
+\ No newline at end of file
+diff --git a/server/src/pch.h b/server/src/pch.h
+new file mode 100644
+index 0000000..92e68cb
+--- /dev/null
++++ b/server/src/pch.h
+@@ -0,0 +1,31 @@
++#include <chrono>
++#include <iostream>
++#include <memory>
++#include <ostream>
++#include <string>
++#include <thread>
++#include <random>
++
++#if defined(_WIN32) || defined(_WIN64)
++#include <windows.h>
++#else
++#include <fcntl.h>
++#include <sys/mman.h>
++#include <unistd.h>
++#include <cstring>
++#endif
++
++#include "libs/json.hpp"
++
++#include "ver.hpp"
++#include "config.hpp"
++
++#include <wx/event.h>
++#include <wx/string.h>
++#include <wx/translation.h>
++#include <wx/filename.h>
++#include "helpers/sd.hpp"
++#include "helpers/sslUtils.hpp"
++#include "libs/SharedLibrary.h"
++#include "libs/SharedMemoryManager.h"
++#include "ui/QueueManager.h"
+diff --git a/src/network/packets.h b/src/network/packets.h
+new file mode 100644
+index 0000000..9679e7d
+--- /dev/null
++++ b/src/network/packets.h
+@@ -0,0 +1,21 @@
++#ifndef _NETWORK_PACKETS_H_
++#define _NETWORK_PACKETS_H_
++#include "libs/json.hpp"
++
++namespace sd_gui_utils {
++    namespace networks {
++
++        enum class PacketType {
++            Request = 0,
++            Response
++        };
++        struct Packet {
++            sd_gui_utils::networks::PacketType type;
++            size_t size;
++            char* data;
++        };
++        NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Packet, type, size, data)
++    }
++}
++
++#endif
+\ No newline at end of file
