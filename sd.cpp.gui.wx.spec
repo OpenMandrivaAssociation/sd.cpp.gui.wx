@@ -1,7 +1,7 @@
 %define git 20241130
 
 Name:           sd.cpp.gui.wx 
-Version:        0.2.3
+Version:        0.2.4
 Release:        1
 Summary:        Stable Diffusion GUI written in C++ 
 License:        MiT
@@ -23,7 +23,7 @@ BuildRequires:  wxwidgets-devel
 BuildSystem:	cmake
 
 %patchlist
-https://github.com/fszontagh/sd.cpp.gui.wx/commit/96762bb206ccdfd5ed78d523d01d6158f82c2ffa.patch
+#https://github.com/fszontagh/sd.cpp.gui.wx/commit/96762bb206ccdfd5ed78d523d01d6158f82c2ffa.patch
 
 
 %description
